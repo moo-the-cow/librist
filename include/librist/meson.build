@@ -33,6 +33,8 @@ if should_install
 					'receiver.h',
 					'sender.h',
 					'stats.h',
+					'tun.h',
+					'tunnel.h',
 					'udpsocket.h',
 					'urlparam.h',
 					version_h_target,
