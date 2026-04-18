@@ -77,7 +77,6 @@ If you have an application that needs to operate outside the sweet spot describe
 ### Planned
 
 - VSF TR-06-4 Part 4 - Decoder Synchronization API
-- VSF TR-06-4 Parts 6 & 7 - Satellite Redundancy Support
 - VSF TR-06-2 (Advanced Profile)
 
 # Tools

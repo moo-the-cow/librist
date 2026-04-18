@@ -640,15 +640,10 @@ int rist_sender_enqueue(struct rist_sender *ctx, const void *data, size_t len, u
 
 	pthread_mutex_lock(&ctx->queue_lock);
 	size_t sender_write_index = atomic_load_explicit(&ctx->sender_queue_write_index, memory_order_acquire);
-	size_t sender_delete_plus_buffer_index = (ctx->sender_queue_delete_index + ctx->sender_queue_size) & (ctx->sender_queue_max - 1);
-	// TODO: figure out why this check fails when sender_write_index = 0
-	if (RIST_UNLIKELY(sender_write_index > 0 && sender_delete_plus_buffer_index > sender_write_index)) {
-		rist_log_priv(&ctx->common, RIST_LOG_ERROR, "\nSender queue is full (%zu + %zu mod %zu = %zu > %zu), dropping packet, decrease bitrate, buffer time length or increase packet size\n",
-				ctx->sender_queue_delete_index,
+	if (RIST_UNLIKELY(ctx->sender_queue_size >= ctx->sender_queue_max - 1)) {
+		rist_log_priv(&ctx->common, RIST_LOG_ERROR, "\nSender queue is full (size=%zu max=%zu), dropping packet, decrease bitrate, buffer time length or increase packet size\n",
 				ctx->sender_queue_size,
-				ctx->sender_queue_max - 1,
-				sender_delete_plus_buffer_index,
-				sender_write_index);
+				ctx->sender_queue_max);
 		// Another solution is to increase the size of RIST_SERVER_QUEUE_BUFFERS at compile time
 		pthread_mutex_unlock(&ctx->queue_lock);
 		return -2;
