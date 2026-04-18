@@ -2,6 +2,7 @@
 #include "socket-shim.h"
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <memory.h>
 #ifndef _WIN32
 #include <ifaddrs.h>
@@ -14,6 +15,7 @@
 #include <net/if_dl.h>
 #endif
 #else
+#include <winsock2.h>
 #include <iphlpapi.h>
 #endif
 
@@ -64,18 +66,37 @@ int _librist_network_get_macaddr(uint8_t mac[]) {
   close(sock);
 #endif
 #else
-  IP_ADAPTER_INFO adaptors[16];
-  DWORD adaptors_size = sizeof(adaptors);
-  DWORD ret = GetAdaptersInfo(adaptors, &adaptors_size);
-  if (ret != ERROR_SUCCESS)
+  /* GetAdaptersInfo is not part of the UWP (WINAPI_FAMILY_APP) API surface
+   * and llvm-mingw's UWP iphlpapi import library does not export it, causing
+   * link failures of librist-dependent UWP apps. GetAdaptersAddresses is
+   * supported on both classic Win32 desktop and on UWP since Windows 8, so
+   * use it unconditionally. */
+  ULONG buf_size = 15 * 1024; /* MSDN-recommended initial size */
+  PIP_ADAPTER_ADDRESSES adapters = NULL;
+  ULONG ret = ERROR_BUFFER_OVERFLOW;
+  for (int attempt = 0; attempt < 3 && ret == ERROR_BUFFER_OVERFLOW; attempt++) {
+    free(adapters);
+    adapters = (PIP_ADAPTER_ADDRESSES)malloc(buf_size);
+    if (!adapters)
+      return -1;
+    ret = GetAdaptersAddresses(AF_UNSPEC,
+                               GAA_FLAG_SKIP_UNICAST | GAA_FLAG_SKIP_ANYCAST |
+                               GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+                               NULL, adapters, &buf_size);
+  }
+  if (ret != ERROR_SUCCESS) {
+    free(adapters);
     return -1;
-  for (PIP_ADAPTER_INFO adaptor = adaptors; adaptor != NULL;
-       adaptor = adaptor->Next) {
-    if (memcmp(mac_null, adaptor->Address, 6)) {
-      memcpy(mac, adaptor->Address, 6);
+  }
+  for (PIP_ADAPTER_ADDRESSES adapter = adapters; adapter != NULL;
+       adapter = adapter->Next) {
+    if (adapter->PhysicalAddressLength >= 6 &&
+        memcmp(mac_null, adapter->PhysicalAddress, 6) != 0) {
+      memcpy(mac, adapter->PhysicalAddress, 6);
       break;
     }
   }
+  free(adapters);
 #endif
   return 0;
 }
