@@ -5,6 +5,75 @@ A library implementing the Video Services Forum (VSF) Technical
 Recommendations TR-06-1 (Simple Profile) and TR-06-2 (Main Profile).
 
 
+Changes for 0.2.13 (2026-04-18):
+--------------------------------
+
+ABI/API:
+  - ABI version 10:1:6 (soversion 4, binary-compatible with 0.2.12)
+  - API version 4.7.0 (unchanged)
+
+Build Fixes:
+
+  Platform build-fix release. No changes to the RIST protocol, public
+  API, or ABI signatures. All existing 0.2.12 installations remain
+  binary-compatible; downstream consumers do not need to recompile.
+
+  This release is only relevant if you build librist targeting one of
+  the platforms listed below. Native Linux, native macOS, FreeBSD,
+  and classic Win32 builds with MSVC are unaffected.
+
+    Windows desktop built with mingw-w64 (gcc or llvm-mingw):
+    - meson: detect clock_gettime with has_header_symbol
+      v0.2.12's probe used cc.has_function('clock_gettime'), which
+      does not resolve the static inline definition shipped by
+      mingw-w64's <pthread_time.h>. The resulting HAVE_CLOCK_GETTIME=0
+      caused contrib/time-shim.h to emit a conflicting extern
+      declaration and broke any downstream build with strict warnings
+      ("redefinition of 'clock_gettime'"). Switching to
+      cc.has_header_symbol detects the inline correctly.
+
+    Windows UWP (i686/x86_64/aarch64-w64-mingw32 UWP toolchains):
+    - Also fixed by the has_header_symbol probe above.
+    - network.c: replace GetAdaptersInfo with GetAdaptersAddresses
+      _librist_network_get_macaddr() called GetAdaptersInfo, which is
+      not part of the UWP (WINAPI_FAMILY_APP) API surface;
+      llvm-mingw's UWP iphlpapi import library does not export it,
+      so UWP consumers of librist.a failed to link with "undefined
+      symbol: _GetAdaptersInfo". Replaced with GetAdaptersAddresses,
+      supported on classic Win32 desktop and on UWP since Windows 8.
+
+    Embedded Apple SDKs (iOS, tvOS, watchOS, visionOS, all archs):
+    - tun_darwin.c: build as stubs on non-macOS Apple platforms
+      The v0.2.12 TUN support was guarded by #ifdef __APPLE__, but
+      <sys/kern_control.h> and <net/if_utun.h> only ship with the
+      macOS SDK. Every non-macOS Apple cross-build failed with
+      "fatal error: 'sys/kern_control.h' file not found", and simply
+      gating off the file produced a later link error because
+      src/rist.c and src/rist-common.c call rist_tun_read /
+      rist_tun_write unconditionally. Pull in <TargetConditionals.h>,
+      restrict the utun implementation to
+      defined(__APPLE__) && TARGET_OS_OSX, and add a second
+      #elif defined(__APPLE__) branch with stub implementations of
+      the seven public rist_tun_* entry points returning -1, matching
+      the pattern src/tun_win.c already uses on Windows. Real utun
+      support on macOS is unchanged.
+
+    macOS used as a cross-build HOST:
+    - meson: skip Homebrew prefix lookup for cross-builds
+      The Homebrew fallback that adds /opt/homebrew or /usr/local
+      include paths was running unconditionally on any Darwin host.
+      Macs cross-compiling librist for iOS, tvOS, visionOS, Android,
+      or mingw could hang or fail at configure. Gated the lookup on
+      a native macOS build. Native-macOS-for-macOS builds are
+      unaffected.
+
+Contributors:
+  - Sergio Ammirata
+
+No source-file changes outside of meson.build, src/network.c, and
+src/tun_darwin.c.
+
+
 Changes for 0.2.12 (2026-04-17):
 --------------------------------
 

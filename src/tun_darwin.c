@@ -5,6 +5,13 @@
  */
 
 #ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
+/* utun sockets and <sys/kern_control.h> / <net/if_utun.h> only exist in the
+ * macOS SDK. iOS / tvOS / watchOS / visionOS expose __APPLE__ but do not ship
+ * those headers, so narrow the guard to plain macOS. */
+#if defined(__APPLE__) && TARGET_OS_OSX
 
 #include "librist/tun.h"
 
@@ -225,4 +232,67 @@ int rist_tun_bring_up(const char *dev)
 	return 0;
 }
 
-#endif /* __APPLE__ */
+#elif defined(__APPLE__)
+
+/* Embedded Apple platforms (iOS, tvOS, watchOS, visionOS) do not ship
+ * <sys/kern_control.h> / <net/if_utun.h> and therefore cannot provide a
+ * real utun implementation. Provide stub entry points with the same
+ * signatures so that rist.c / rist-common.c still link cleanly. All
+ * calls fail with -1, matching tun_win.c's behaviour on platforms
+ * without native TUN support. */
+
+#include "librist/tun.h"
+#include <stdio.h>
+
+int rist_tun_open(const char *requested_name, char *actual_name, size_t name_len)
+{
+	(void)requested_name;
+	(void)actual_name;
+	(void)name_len;
+	fprintf(stderr, "librist: TUN is not supported on this Apple platform\n");
+	return -1;
+}
+
+void rist_tun_close(int fd)
+{
+	(void)fd;
+}
+
+int rist_tun_read(int fd, uint8_t *buf, size_t len)
+{
+	(void)fd;
+	(void)buf;
+	(void)len;
+	return -1;
+}
+
+int rist_tun_write(int fd, const uint8_t *buf, size_t len)
+{
+	(void)fd;
+	(void)buf;
+	(void)len;
+	return -1;
+}
+
+int rist_tun_set_ip(const char *dev, const char *ip, int prefix_len)
+{
+	(void)dev;
+	(void)ip;
+	(void)prefix_len;
+	return -1;
+}
+
+int rist_tun_set_mtu(const char *dev, int mtu)
+{
+	(void)dev;
+	(void)mtu;
+	return -1;
+}
+
+int rist_tun_bring_up(const char *dev)
+{
+	(void)dev;
+	return -1;
+}
+
+#endif /* defined(__APPLE__) && TARGET_OS_OSX / embedded Apple */
