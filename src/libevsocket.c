@@ -16,6 +16,13 @@
 
 #ifdef _WIN32
 
+/* librist uses WSAPoll and needs struct pollfd / POLLIN / POLLOUT from
+ * <winsock2.h>, all gated on _WIN32_WINNT >= 0x0600 by mingw-w64. */
+#if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0600
+# undef _WIN32_WINNT
+# define _WIN32_WINNT 0x0600
+#endif
+
 #if !defined(UNDER_CE)
 # define _NO_OLDNAMES 1
 # include <io.h>

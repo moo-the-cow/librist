@@ -22,6 +22,14 @@
 
 /* Windows */
 #ifdef _WIN32
+/* librist uses WSAPoll/inet_pton/inet_ntop which mingw-w64 gates on
+ * _WIN32_WINNT >= 0x0600. Force a Vista minimum before <winsock2.h>
+ * is pulled in, so downstream consumers that set a lower baseline
+ * (e.g. VLC 3.0 contribs pin it to XP SP2 via 0x0502) still compile. */
+#if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0600
+# undef _WIN32_WINNT
+# define _WIN32_WINNT 0x0600
+#endif
 #include <winsock2.h>
 #define _WINSOCKAPI_
 #include <windows.h>
