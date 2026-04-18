@@ -45,6 +45,7 @@ builtin_cjson = get_option('builtin_cjson')
 builtin_mbedtls = get_option('builtin_mbedtls')
 
 if (host_machine.system() == 'darwin'
+    and not meson.is_cross_build()
     and find_program('brew', required : false).found()
     and (not builtin_cjson or not builtin_mbedtls))
 	r = run_command('brew', '--prefix', check: true)
