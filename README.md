@@ -34,6 +34,8 @@ The goal of this project is to provide a RIST library for **most platforms**.
 - Differentiated bandwidth statistics (normal/retry/rejected traffic)
 - Session timeout API and callbacks
 - Ephemeral listening ports
+- Cross-platform TUN interface support in the library (macOS utun, Linux /dev/net/tun, Windows stub)
+- `data_fd` forwarding API: attach any file descriptor (socket, FIFO, TUN fd) and let librist handle the data path
 
 ## Dependencies
 
@@ -87,6 +89,7 @@ The library includes several command-line utilities:
 - **ristreceiver** - RIST receiver application
 - **rist2rist** - RIST relay/proxy application
 - **udp2udp** - UDP relay application
+- **risttunnel** - Point-to-point IP tunnel over RIST (bidirectional, ARQ, crypto)
 - **prometheus-exporter** - Prometheus metrics endpoint (when built with libmicrohttpd)
 
 All tools support YAML configuration files for easier deployment.

@@ -5,14 +5,27 @@ A library implementing the Video Services Forum (VSF) Technical
 Recommendations TR-06-1 (Simple Profile) and TR-06-2 (Main Profile).
 
 
-Changes for 0.2.12 (2026-03-11):
+Changes for 0.2.12 (2026-04-17):
 --------------------------------
 
+ABI/API:
+  - ABI version 10:0:6 (soversion 4, binary-compatible with 0.2.11)
+  - API version 4.7.0
+
 New Features:
+  - Cross-platform TUN support moved into the library
+    (rist_tun_open/close/read/write/set_ip/set_mtu/bring_up)
+    macOS (utun), Linux (/dev/net/tun), Windows (stub)
+  - data_fd forwarding API: rist_sender_data_fd_set,
+    rist_receiver_data_fd_set, rist_data_fd_stats_get
+    librist reads/writes directly to the fd, no application
+    code in the data path (works with sockets, FIFOs, TUN fds)
+  - New risttunnel tool: point-to-point IP tunnel over RIST
   - YAML config file support for ristsender/ristreceiver with native parser
   - Receiver session timeout API and --session-timeout CLI option
   - Peer statistics in receiver output
   - Multicast interface (miface) in sender peer statistics JSON
+  - avg_buffer_time field exposed in receiver_flow stats struct
   - New udp2udp tool for UDP relay
   - Profile selection (--profile) in rist2rist
   - Sender input queue statistics
@@ -20,16 +33,43 @@ New Features:
   - Differentiated bitrate tracking and sender stats API
 
 Bug Fixes:
+  - Fix sender queue full detection: replace wrap-unsafe index
+    arithmetic (which silently misfired on ring-buffer wraparound)
+    with a size-vs-max comparison. Prevents in-flight retransmit
+    buffers from being silently overwritten under sustained load.
+  - Fix OOB main-profile data delivery: rist_send_seq_rtcp no
+    longer strips the first 4 bytes of zero-header OOB packets,
+    and rist_oob_dequeue now iterates child peers when the OOB
+    buffer references a listener peer (matching main-channel
+    behaviour instead of failing silently).
+  - Fix receiver crash on configurable RTT multiplier path
+  - Fix bogus lost-packet counters
   - Fix premature stream stop on ECHO timeout for single-path (closes #196)
   - Fix multi-sender queue issues (static buffer_size moved to context)
   - Thread-safe FIFO access in rist_receiver_data_read2
   - Fix memory leaks (authentication failures, sender queue)
+  - Fix OpenMetrics response: add missing trailing EOF line
+  - Fix rist_client_flow_quality metric unit
   - Fix OpenMetrics Content-Type header for Prometheus compatibility
   - Fix RTT min/max invalid values
   - Fix const correctness in URL parameter parsing
   - Fix signed/unsigned comparison statements
   - Fix missing strings.h include in yamlparse.c
   - Fix clock used when processing RR with lsr older than last SR
+  - Fix -Wmisleading-indentation warning in receiver FIFO overflow path
+  - Fix tools build on macOS/Windows/FreeBSD: include endian-shim.h
+    for be16toh in ristsender.c and ristreceiver.c
+  - Fix tools build: always compile tunnel_interface/tun_mode into
+    rist_tools_config_object (consumers reference them unconditionally)
+  - Fix missing_counter bookkeeping: track queue length instead of
+    NACK-sent count. Previously the counter stayed at 0 on paths that
+    never emit NACKs (e.g. simple-profile multicast), causing the
+    missing_queue JSON stat to under-report and the congestion guard in
+    receiver_mark_missing to never trip.
+  - Fix build-only-platform-matching TUN source file; previously the
+    non-matching src/tun_*.c were compiled into an empty translation
+    unit and tripped -Werror=pedantic on Ubuntu/MinGW.
+  - Fix risttunnel build on MinGW: include <windows.h> for Sleep().
 
 Improvements:
   - Refactored sender queue management for better memory efficiency
@@ -38,6 +78,8 @@ Improvements:
   - Refactored flow timeout semantics
 
 Build System:
+  - TUN support is now always compiled; removed the use_tun meson option
+  - CI: drop -Duse_tun=true flag from ubuntu build job
   - Fix false positive mbedtls detection in meson build
   - Use MbedTLS cmake config module
   - Check brew exists before calling (macOS)
@@ -46,6 +88,7 @@ Build System:
 Acknowledgements:
   - Dave Evans for RR clock fix
   - Steve Lhomme for aes.h warning fixes
+  - Laur for the receiver FIFO misleading-indentation report
 
 
 Changes for 0.2.11 (2024-11-15):
