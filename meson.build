@@ -39,16 +39,18 @@ deps = []
 platform_files = []
 inc = []
 inc += include_directories('.', 'src', 'include/librist', 'include', 'contrib')
-if (host_machine.system() == 'darwin'
-    and find_program('brew', required : false).found())
-	r = run_command('brew', '--prefix', check: true)
-	brewoutput = r.stdout().strip()
-	inc += include_directories(brewoutput + '/include')
-endif
 
 #builtin_lz4 = get_option('builtin_lz4')
 builtin_cjson = get_option('builtin_cjson')
 builtin_mbedtls = get_option('builtin_mbedtls')
+
+if (host_machine.system() == 'darwin'
+    and find_program('brew', required : false).found()
+    and (not builtin_cjson or not builtin_mbedtls))
+	r = run_command('brew', '--prefix', check: true)
+	brewoutput = r.stdout().strip()
+	inc += include_directories(brewoutput + '/include')
+endif
 use_mbedtls = get_option('use_mbedtls')
 use_nettle = get_option('use_nettle')
 use_gnutls = get_option('use_gnutls')
@@ -78,6 +80,7 @@ have_clock_gettime = false
 threads = []
 test_args = []
 if host_machine.system() == 'windows'
+	platform_files += 'src/tun_win.c'
 	deps += [
 		cc.find_library('ws2_32'),
 		cc.find_library('iphlpapi')
@@ -115,6 +118,7 @@ windows_version_test = '''
 	librist_soversion = ''
 else
 	if host_machine.system() == 'linux' or host_machine.system() == 'android'
+		platform_files += 'src/tun_linux.c'
 		test_args += '-D_GNU_SOURCE'
 		add_project_arguments('-D_GNU_SOURCE', language: 'c')
 		if cc.check_header('linux/if_alg.h')
@@ -135,6 +139,7 @@ void test(void) {
 			inc += include_directories('compat/android')
 		endif
 	elif host_machine.system() == 'darwin'
+		platform_files += 'src/tun_darwin.c'
 		test_args += '-D_DARWIN_C_SOURCE'
 		add_project_arguments('-D_DARWIN_C_SOURCE', language: 'c')
 	elif host_machine.system() == 'gnu'
@@ -234,14 +239,6 @@ if builtin_cjson
 	cjson_lib = declare_dependency( compile_args : '-DCJSON_HIDE_SYMBOLS',
 									sources: 'contrib/contrib_cJSON/cjson/cJSON.c',
 									include_directories : include_directories('contrib/contrib_cJSON'))
-endif
-
-if get_option('use_tun')
-	if host_machine.system() == 'linux' and cc.check_header('linux/if_tun.h')
-		add_project_arguments(['-DUSE_TUN'], language: 'c')
-	else
-		error('TUN only supported on linux at this moment')
-	endif
 endif
 
 crypto_deps = []

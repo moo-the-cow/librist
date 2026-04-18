@@ -19,6 +19,8 @@
 #include "opt.h"
 #include "oob.h"
 #include "headers.h"
+#include "tun.h"
+#include "tunnel.h"
 
 #ifdef __cplusplus
 extern "C" {

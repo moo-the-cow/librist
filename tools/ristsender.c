@@ -28,9 +28,9 @@
 #include <stdatomic.h>
 #include "oob_shared.h"
 #include "prometheus-exporter.h"
-#ifdef USE_TUN
+#include "endian-shim.h"
+#if defined(__unix) || defined(__APPLE__)
 #include <sys/ioctl.h>
-#include <linux/if_tun.h>
 #endif
 #include "yamlparse.h"
 
@@ -67,14 +67,12 @@ struct rist_callback_object {
 	uint8_t recv[RIST_MAX_PACKET_SIZE + 100];
 };
 
-#ifdef USE_TUN
 struct rist_callback_tun_object {
 	struct rist_ctx *sender_ctx;
 	int tun;
 	int tun_mode;
 	bool send_rist;
 };
-#endif
 
 struct receive_thread_object {
 	int sd;
@@ -92,9 +90,7 @@ struct rist_sender_args {
 	int buffer_size;
 	int statsinterval;
 	uint16_t stream_id;
-#ifdef USE_TUN
 	struct rist_callback_tun_object *callback_tun_object;
-#endif
 };
 
 #if HAVE_PROMETHEUS_SUPPORT
@@ -117,10 +113,8 @@ static struct option long_options[] = {
 { "encryption-type", required_argument, NULL, 'e' },
 { "profile",         required_argument, NULL, 'p' },
 { "null-packet-deletion",  no_argument, NULL, 'n' },
-#ifdef USE_TUN
 { "tun",             required_argument, NULL, 't' },
 { "tun-mode",        required_argument, NULL, 'm' },
-#endif
 { "stats",           required_argument, NULL, 'S' },
 { "verbose-level",   required_argument, NULL, 'v' },
 { "remote-logging",  required_argument, NULL, 'r' },
@@ -150,10 +144,8 @@ static struct option long_options[] = {
 
 const char help_str[] = "Usage: %s [OPTIONS] \nWhere OPTIONS are:\n"
 "       -i | --inputurl  udp://... or rtp://... * | Comma separated list of input udp or rtp URLs            |\n"
-#ifdef USE_TUN
 "                                                 | Use tun://@ to read udp data from a tun device defined   |\n"
 "                                                 | using the -t option                                      |\n"
-#endif
 "       -o | --outputurl rist://...             * | Comma separated list of output rist URLs                 |\n"
 "       -b | --buffer value                       | Default buffer size for packet retransmissions           |\n"
 "       -s | --secret PWD                         | Default pre-shared encryption secret                     |\n"
@@ -168,13 +160,11 @@ const char help_str[] = "Usage: %s [OPTIONS] \nWhere OPTIONS are:\n"
 "                                                 | of usernames and passwords to validate against. Use the  |\n"
 "                                                 | ristsrppasswd tool to create the line entries.           |\n"
 #endif
-#ifdef USE_TUN
 "       -t | --tun name                           | Create a tun device and use it for data communications   |\n"
 "       -m | --tun-mode number                    | Data management on the tun interface:                    |\n"
 "                                                 | 0 = all data is accepted into and out of oob channel     |\n"
 "                                                 | 1 = only non udp data is accepted (default)              |\n"
 "                                                 | 2 = no data goes into or out of oob channel              |\n"
-#endif
 "       -f | --fast-start value                   | Controls data output flow before handshake is completed  |\n"
 "       -c | --config name.yaml                   | YAML config file                                         |\n"
 //"                                                 | -1 = hold data out and igmp source joins                 |\n"
@@ -359,7 +349,6 @@ static int cb_auth_disconnect(void *arg, struct rist_peer *peer)
 	return 0;
 }
 
-#ifdef USE_TUN
 static int rist_validate_tun_data(uint8_t *buffer, ssize_t buffer_len)
 {
 	struct ipheader *ip = (struct ipheader *) buffer;
@@ -403,7 +392,7 @@ static int cb_recv_oob(void *arg, const struct rist_oob_block *oob_block)
 		{
 			if (callback_tun_object->tun_mode == 0 ||
 				(callback_tun_object->tun_mode == 1 && protocol != 17)) {
-				if (write(callback_tun_object->tun, oob_block->payload, oob_block->payload_len) < 0) {
+				if (rist_tun_write(callback_tun_object->tun, oob_block->payload, oob_block->payload_len) < 0) {
 					rist_log(&logging_settings, RIST_LOG_ERROR, "Error %d writing %d bytes to output tun\n", errno, oob_block->payload_len);
 				}
 			}
@@ -411,19 +400,6 @@ static int cb_recv_oob(void *arg, const struct rist_oob_block *oob_block)
 	}
 	return 0;
 }
-#else
-static int cb_recv_oob(void *arg, const struct rist_oob_block *oob_block)
-{
-	struct rist_ctx *ctx = (struct rist_ctx *)arg;
-	(void)ctx;
-	int message_len = 0;
-	char *message = oob_process_api_message((int)oob_block->payload_len, (char *)oob_block->payload, &message_len);
-	if (message) {
-		rist_log(&logging_settings, RIST_LOG_INFO,"Out-of-band api data received: %.*s\n", message_len, message);
-	}
-	return 0;
-}
-#endif
 
 static int sender_stats_callback(void *arg, uint16_t version, char *stats_json, uint32_t json_size)
 {
@@ -464,11 +440,7 @@ static struct rist_peer* setup_rist_peer(struct rist_ctx_wrap *w, struct rist_se
 	}
 
 	if (setup->profile != RIST_PROFILE_SIMPLE) {
-#ifdef USE_TUN
 		if (rist_oob_callback_set(ctx, cb_recv_oob, setup->callback_tun_object) == -1) {
-#else
-		if (rist_oob_callback_set(ctx, cb_recv_oob, ctx) == -1) {
-#endif
 			rist_log(&logging_settings, RIST_LOG_ERROR, "Could not enable out-of-band data\n");
 			return NULL;
 		}
@@ -564,7 +536,6 @@ static struct rist_peer* setup_rist_peer(struct rist_ctx_wrap *w, struct rist_se
 	return peer;
 }
 
-#ifdef USE_TUN
 static void rist_process_tun_data(struct rist_callback_tun_object *callback_tun_object, uint8_t *buffer, ssize_t buffer_len)
 {
 	int protocol = rist_validate_tun_data(buffer, buffer_len);
@@ -612,7 +583,7 @@ static PTHREAD_START_FUNC(tun_loop, arg)
 		// Wait for input to become ready or until the time out;
 		if (select(FD_SETSIZE, &read_fds, NULL, NULL, &timeout) == 1)
 		{
-			ssize_t r = read(callback_tun_object->tun, &buffer[0], RIST_MAX_PACKET_SIZE);
+			ssize_t r = rist_tun_read(callback_tun_object->tun, &buffer[0], RIST_MAX_PACKET_SIZE);
 			if (r > 0) {
 				rist_process_tun_data(callback_tun_object, &buffer[0], r);
 			}
@@ -622,7 +593,6 @@ static PTHREAD_START_FUNC(tun_loop, arg)
 	}
 	return 0;
 }
-#endif
 
 static PTHREAD_START_FUNC(input_loop, arg)
 {
@@ -710,11 +680,9 @@ int main(int argc, char *argv[])
 	struct evsocket_event *event[MAX_INPUT_COUNT];
 	char *inputurl = NULL;
 	char *outputurl = NULL;
-#ifdef USE_TUN
 	struct rist_callback_tun_object callback_tun_object = {0};
 	callback_tun_object.tun_mode = 1;
 	char *oobtun = NULL;
-#endif
 	char *shared_secret = NULL;
 	int buffer_size = 0;
 	int encryption_type = 0;
@@ -726,11 +694,7 @@ int main(int argc, char *argv[])
 	struct rist_sender_args peer_args;
 	char *remote_log_address = NULL;
 	bool thread_started[MAX_INPUT_COUNT +1] = {false};
-#ifdef USE_TUN
 	pthread_t thread_main_loop[MAX_INPUT_COUNT+2] = { 0 };
-#else
-	pthread_t thread_main_loop[MAX_INPUT_COUNT+1] = { 0 };
-#endif
 	rist_tools_config_object *yaml_config = NULL;
 	char *yamlfile = NULL;
 
@@ -775,14 +739,12 @@ int main(int argc, char *argv[])
 		case 'e':
 			encryption_type = atoi(optarg);
 		break;
-#ifdef USE_TUN
 		case 't':
 			oobtun = strdup(optarg);
 		break;
 		case 'm':
 			callback_tun_object.tun_mode = atoi(optarg);
 		break;
-#endif
 		case 'p':
 			profile = atoi(optarg);
 		break;
@@ -867,12 +829,10 @@ int main(int argc, char *argv[])
 			npd = yaml_config->null_packet_deletion;
 			profile = yaml_config->profile;
 			statsinterval = yaml_config->stats_interval;
-#ifdef USE_TUN
 			// hardcoded mode for now
 			// callback_tun_object.tun_mode = 1; (yaml_config->tun_mode)
 			if (yaml_config->tunnel_interface)
 				oobtun = strdup(yaml_config->tunnel_interface);
-#endif
 #if HAVE_SRP_SUPPORT
 			if (yaml_config->srp_file)
 				srpfile = strdup(yaml_config->srp_file);
@@ -947,18 +907,17 @@ int main(int argc, char *argv[])
 	peer_args.buffer_size = buffer_size;
 	peer_args.statsinterval = statsinterval;
 
-#ifdef USE_TUN
 	// Setup tun device
 	if (oobtun) {
-		callback_tun_object.tun = oob_setup_tun_device(oobtun);
-		if (callback_tun_object.tun == -1)
+		char tun_ifname[64] = {0};
+		callback_tun_object.tun = rist_tun_open(oobtun, tun_ifname, sizeof(tun_ifname));
+		if (callback_tun_object.tun >= 0)
+			rist_tun_bring_up(tun_ifname);
+		else {
 			rist_log(&logging_settings, RIST_LOG_ERROR, "tun open error: %s\n", strerror(errno));
-		else if (callback_tun_object.tun < 0)
-			rist_log(&logging_settings, RIST_LOG_ERROR, "tun ioctl error: %s (%d)\n", strerror(errno), callback_tun_object.tun);
-		if (callback_tun_object.tun < 0)
 			exit(1);
+		}
 	}
-#endif
 
 	bool rist_listens = false;
 	if (strstr(outputurl, "://@") != NULL) {
@@ -997,9 +956,7 @@ int main(int argc, char *argv[])
 			}
 		}
 
-#ifdef USE_TUN
 		peer_args.callback_tun_object = &callback_tun_object;
-#endif
 
 		// Setup the output rist objects
 		if (rist_listens && i > 0) {
@@ -1019,14 +976,12 @@ int main(int argc, char *argv[])
 			if (callback_object[i].sender_ctx == NULL)
 				goto shutdown;
 		}
-#ifdef USE_TUN
 		for (size_t j = 0; j < MAX_OUTPUT_COUNT; j++) {
 			// Use the first context for OOB tun context
 			if (!callback_tun_object.sender_ctx) {
 				callback_tun_object.sender_ctx = callback_object[i].sender_ctx->ctx;
 			}
 		}
-#endif
 
 		if (strcmp(udp_config->prefix, "rist") == 0) {
 			// This is a rist input (new context for each listener)
@@ -1044,12 +999,10 @@ int main(int argc, char *argv[])
 			rist_udp_config_free2(&udp_config);
 			udp_config = NULL;
 		}
-#ifdef USE_TUN
 		else if (strcmp(udp_config->prefix, "tun") == 0) {
 			atleast_one_socket_opened = true;
 			callback_tun_object.send_rist = true;
 		}
-#endif
 		else {
 			if(!evctx)
 				evctx = evsocket_create();
@@ -1084,15 +1037,9 @@ next:
 		inputtoken = strtok_r(NULL, ",", &saveptrinput);
 	}
 
-#ifdef USE_TUN
 	if (!atleast_one_socket_opened && !callback_tun_object.tun) {
 		goto shutdown;
 	}
-#else
- 	if (!atleast_one_socket_opened) {
- 		goto shutdown;
- 	}
-#endif
 
 	if (evctx && pthread_create(&thread_main_loop[0], NULL, input_loop, (void *)callback_object) != 0)
 	{
@@ -1120,13 +1067,11 @@ next:
 		}
 	}
 
-#ifdef USE_TUN
 	if (callback_tun_object.tun && pthread_create(&thread_main_loop[MAX_INPUT_COUNT + 1], NULL, tun_loop, (void *)&callback_tun_object) != 0)
 	{
 		rist_log(&logging_settings, RIST_LOG_ERROR, "Could not start tun read thread\n");
 		goto shutdown;
 	}
-#endif
 
 #ifdef _WIN32
 		system("pause");
@@ -1167,14 +1112,12 @@ shutdown:
 		free(inputurl);
 	if (outputurl)
 		free(outputurl);
-#ifdef USE_TUN
 	if (thread_main_loop[MAX_INPUT_COUNT+1])
 		pthread_join(thread_main_loop[MAX_INPUT_COUNT+1], NULL);
 	if (oobtun)
 		free(oobtun);
 	if (callback_tun_object.tun)
 		close(callback_tun_object.tun);
-#endif
 	if (shared_secret)
 		free(shared_secret);
 

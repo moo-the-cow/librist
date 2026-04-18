@@ -18,6 +18,8 @@
 #include "time-shim.h"
 #include "proto/rist_time.h"
 #include "network.h"
+#include "librist/tun.h"
+#include "librist/tunnel.h"
 #include <sys/types.h>
 #include "proto/protocol_gre.h"
 #if HAVE_SRP_SUPPORT
@@ -785,7 +787,6 @@ static int rist_process_nack(struct rist_flow *f, struct rist_missing_buffer *b)
 				rtt = peer->config.recovery_rtt_max;
 			}
 			if (b->nack_count == 0) {
-				f->missing_counter++;
 				pthread_mutex_lock(&(get_cctx(peer)->stats_lock));
 				f->stats_instant.missing++;
 				pthread_mutex_unlock(&(get_cctx(peer)->stats_lock));
@@ -996,7 +997,18 @@ static void receiver_output(struct rist_receiver *ctx, struct rist_flow *f)
 							NULL, b,
 							&payload[RIST_MAX_PAYLOAD_OFFSET], f->flow_id, flags);
 					b->data = NULL;
-					if (ctx->receiver_data_callback && block) {
+					if (ctx->receiver_data_fd >= 0 && block) {
+						int written;
+						if (ctx->receiver_data_fd_flags & RIST_DATA_FD_FLAG_TUN)
+							written = rist_tun_write(ctx->receiver_data_fd, block->payload, block->payload_len);
+						else
+							written = (int)write(ctx->receiver_data_fd, block->payload, block->payload_len);
+						if (written > 0) {
+							atomic_fetch_add_explicit(&ctx->data_fd_rx_packets, 1, memory_order_relaxed);
+							atomic_fetch_add_explicit(&ctx->data_fd_rx_bytes, (uint_fast64_t)written, memory_order_relaxed);
+						}
+						rist_receiver_data_block_free2(&block);
+					} else if (ctx->receiver_data_callback && block) {
 						rist_ref_inc(block->ref);
 						// send to callback synchronously
 						ctx->receiver_data_callback(ctx->receiver_data_callback_argument,
@@ -1007,7 +1019,7 @@ static void receiver_output(struct rist_receiver *ctx, struct rist_flow *f)
 					size_t dataout_fifo_read_index = atomic_load_explicit(&f->dataout_fifo_queue_read_index, memory_order_acquire);
 					uint32_t fifo_count = (dataout_fifo_write_index - dataout_fifo_read_index)&(ctx->fifo_queue_size -1);
 					if (fifo_count +1 == ctx->fifo_queue_size || !ctx->fifo_queue_size) {
-						if (!ctx->receiver_data_callback)
+						if (!ctx->receiver_data_callback && ctx->receiver_data_fd < 0)
 							rist_log_priv(&ctx->common, RIST_LOG_ERROR, "Rist data out fifo queue overflow\n");
 						rist_receiver_data_block_free2(&block);
 						atomic_store_explicit(&f->fifo_overflow, true, memory_order_release);
@@ -1242,8 +1254,7 @@ nack_loop_continue:
 			if (!next)
 				f->missing_tail = previous;
 			*prev = next;
-			if (mb->nack_count != 0)
-				f->missing_counter--;
+			f->missing_counter--;
 			free(mb);
 			mb = next;
 		} else {

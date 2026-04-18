@@ -31,7 +31,7 @@ build-ubuntu:
         - avx2
         - amd64
     script:
-        - meson build --buildtype release --werror -Duse_tun=true
+        - meson build --buildtype release --werror
         - ninja -C build
 
 build-win64:

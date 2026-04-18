@@ -147,10 +147,8 @@ void parse_config_file(rist_tools_config_object *config, char *current_key, yaml
 		else if (strcmp(current_key,"secret") == 0) strapp(&config->secret,(char *) node->value);
 		else if (strcmp(current_key,"null-packet-deletion") == 0) config->null_packet_deletion=atoi((char *) node->value);
 		else if (strcmp(current_key,"fast-start") == 0) config->fast_start=atoi((char *) node->value);
-#ifdef USE_TUN
 		else if (strcmp(current_key,"tun-mode") == 0) config->tun_mode=atoi((char *) node->value);
 		else if (strcmp(current_key,"tun") == 0) strapp(&config->tunnel_interface,(char *) node->value);
-#endif
 #ifdef HAVE_SRP_SUPPORT
 		else if (strcmp(current_key,"srpfile") == 0) strapp(&config->srp_file,(char *) node->value);
 #endif
@@ -278,10 +276,8 @@ void cleanup_tools_config(rist_tools_config_object * config)
         free(config->input_url);
 	if (config->output_url)
         free(config->output_url);
-#ifdef USE_TUN
 	if (config->tunnel_interface)
         free(config->tunnel_interface);
-#endif
 #ifdef HAVE_SRP_SUPPORT
 	if (config->srp_file)
         free(config->srp_file);

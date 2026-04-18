@@ -20,8 +20,13 @@
 #include "proto/eap.h"
 #endif
 #include <assert.h>
+#include "librist/tun.h"
+#include "librist/tunnel.h"
 #ifdef _WIN32
 #include <processthreadsapi.h>
+#else
+#include <unistd.h>
+#include <poll.h>
 #endif
 
 #undef RIST_DEPRECATED
@@ -51,6 +56,7 @@ int rist_receiver_create(struct rist_ctx **_ctx, enum rist_profile profile,
 	}
 	rist_ctx->mode = RIST_RECEIVER_MODE;
 	rist_ctx->receiver_ctx = ctx;
+	ctx->receiver_data_fd = -1;
 	ctx->id = (intptr_t)ctx;
 	if (init_common_ctx(&ctx->common, profile))
 		goto fail;
@@ -356,6 +362,7 @@ int rist_sender_create(struct rist_ctx **_ctx, enum rist_profile profile,
 	}
 	rist_ctx->mode = RIST_SENDER_MODE;
 	rist_ctx->sender_ctx = ctx;
+	ctx->data_fd = -1;
 
 	ctx->id = (intptr_t)ctx;
 	if (init_common_ctx(&ctx->common, profile))
@@ -1143,6 +1150,50 @@ int rist_peer_destroy(struct rist_ctx *ctx, struct rist_peer *peer) {
 	return ret;
 }
 
+static PTHREAD_START_FUNC(sender_data_fd_read_loop, arg)
+{
+	struct rist_sender *ctx = (struct rist_sender *)arg;
+	struct rist_ctx sender_wrapper = { .mode = RIST_SENDER_MODE, .sender_ctx = ctx, .receiver_ctx = NULL };
+	const size_t bufsize = ctx->data_fd_max_packet_size > 0 ? ctx->data_fd_max_packet_size : 1500;
+	uint8_t *buf = malloc(bufsize);
+	if (!buf)
+		return NULL;
+
+	const bool is_tun = (ctx->data_fd_flags & RIST_DATA_FD_FLAG_TUN) != 0;
+
+#if defined(__unix) || defined(__APPLE__)
+	struct pollfd pfd = { .fd = ctx->data_fd, .events = POLLIN };
+#endif
+
+	while (!atomic_load_explicit(&ctx->common.shutdown, memory_order_acquire)) {
+#if defined(__unix) || defined(__APPLE__)
+		int ret = poll(&pfd, 1, 100);
+		if (ret <= 0)
+			continue;
+#endif
+		int nread;
+		if (is_tun)
+			nread = rist_tun_read(ctx->data_fd, buf, bufsize);
+		else
+			nread = (int)read(ctx->data_fd, buf, bufsize);
+
+		if (nread <= 0)
+			continue;
+
+		struct rist_data_block data_block = {0};
+		data_block.payload = buf;
+		data_block.payload_len = nread;
+		int sent = rist_sender_data_write(&sender_wrapper, &data_block);
+		if (sent > 0) {
+			atomic_fetch_add_explicit(&ctx->data_fd_tx_packets, 1, memory_order_relaxed);
+			atomic_fetch_add_explicit(&ctx->data_fd_tx_bytes, (uint_fast64_t)nread, memory_order_relaxed);
+		}
+	}
+
+	free(buf);
+	return NULL;
+}
+
 static int rist_sender_start(struct rist_sender *ctx)
 {
 	pthread_mutex_lock(&ctx->mutex);
@@ -1153,6 +1204,14 @@ static int rist_sender_start(struct rist_sender *ctx)
 			goto unlock_failed;
 		}
 		ctx->protocol_running = true;
+
+		if (ctx->data_fd >= 0) {
+			if (pthread_create(&ctx->data_fd_thread, NULL, sender_data_fd_read_loop, (void *)ctx) != 0) {
+				rist_log_priv(&ctx->common, RIST_LOG_ERROR, "Could not create data fd reader thread.\n");
+				goto unlock_failed;
+			}
+			ctx->data_fd_thread_started = true;
+		}
 	} else {
 		goto unlock_failed;
 	}
@@ -1216,6 +1275,10 @@ static int rist_sender_destroy(struct rist_sender *ctx)
 
 	rist_log_priv(&ctx->common, RIST_LOG_INFO, "Triggering protocol loop termination\n");
 	atomic_store_explicit(&ctx->common.shutdown, 1, memory_order_release);
+
+	if (ctx->data_fd_thread_started)
+		pthread_join(ctx->data_fd_thread, NULL);
+
 	pthread_mutex_lock(&ctx->mutex);
 	bool running = ctx->protocol_running;
 	pthread_mutex_unlock(&ctx->mutex);
@@ -1257,6 +1320,61 @@ int rist_destroy(struct rist_ctx *ctx) {
 	else
 		return -1;
 	free(ctx);
+	return 0;
+}
+
+/* Data fd tunnel API */
+
+int rist_sender_data_fd_set(struct rist_ctx *rist_ctx, int fd,
+                            size_t max_packet_size, uint32_t flags)
+{
+	if (RIST_UNLIKELY(!rist_ctx)) {
+		rist_log_priv3(RIST_LOG_ERROR, "ctx is null on rist_sender_data_fd_set call!\n");
+		return -1;
+	}
+	if (RIST_UNLIKELY(rist_ctx->mode != RIST_SENDER_MODE || !rist_ctx->sender_ctx)) {
+		rist_log_priv3(RIST_LOG_ERROR, "rist_sender_data_fd_set call with CTX not set up for sending\n");
+		return -1;
+	}
+	struct rist_sender *ctx = rist_ctx->sender_ctx;
+	ctx->data_fd = fd;
+	ctx->data_fd_max_packet_size = max_packet_size;
+	ctx->data_fd_flags = flags;
+	return 0;
+}
+
+int rist_receiver_data_fd_set(struct rist_ctx *rist_ctx, int fd, uint32_t flags)
+{
+	if (RIST_UNLIKELY(!rist_ctx)) {
+		rist_log_priv3(RIST_LOG_ERROR, "ctx is null on rist_receiver_data_fd_set call!\n");
+		return -1;
+	}
+	if (RIST_UNLIKELY(rist_ctx->mode != RIST_RECEIVER_MODE || !rist_ctx->receiver_ctx)) {
+		rist_log_priv3(RIST_LOG_ERROR, "rist_receiver_data_fd_set call with CTX not set up for receiving\n");
+		return -1;
+	}
+	struct rist_receiver *ctx = rist_ctx->receiver_ctx;
+	ctx->receiver_data_fd = fd;
+	ctx->receiver_data_fd_flags = flags;
+	return 0;
+}
+
+int rist_data_fd_stats_get(struct rist_ctx *ctx, struct rist_data_fd_stats *stats)
+{
+	if (RIST_UNLIKELY(!ctx || !stats))
+		return -1;
+
+	memset(stats, 0, sizeof(*stats));
+
+	if (ctx->mode == RIST_SENDER_MODE && ctx->sender_ctx) {
+		stats->tx_packets = atomic_load_explicit(&ctx->sender_ctx->data_fd_tx_packets, memory_order_relaxed);
+		stats->tx_bytes = atomic_load_explicit(&ctx->sender_ctx->data_fd_tx_bytes, memory_order_relaxed);
+	} else if (ctx->mode == RIST_RECEIVER_MODE && ctx->receiver_ctx) {
+		stats->rx_packets = atomic_load_explicit(&ctx->receiver_ctx->data_fd_rx_packets, memory_order_relaxed);
+		stats->rx_bytes = atomic_load_explicit(&ctx->receiver_ctx->data_fd_rx_bytes, memory_order_relaxed);
+	} else {
+		return -1;
+	}
 	return 0;
 }
 

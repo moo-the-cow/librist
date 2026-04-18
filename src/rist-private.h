@@ -377,6 +377,12 @@ struct rist_receiver {
 	void *receiver_data_callback_argument;
 	int receiver_data_ready_notify_fd;
 
+	/* Data fd output (tunnel mode) — write received data directly to fd */
+	int receiver_data_fd;
+	uint32_t receiver_data_fd_flags;
+	atomic_uint_fast64_t data_fd_rx_packets;
+	atomic_uint_fast64_t data_fd_rx_bytes;
+
 	/* Receiver session timeout callback */
 	receiver_session_timeout_callback_t receiver_session_timeout_callback;
 	void *receiver_session_timeout_callback_argument;
@@ -466,6 +472,15 @@ struct rist_sender {
 	int (*sender_stats_callback)(void *arg, uint16_t version, char *stats_json, uint32_t json_size);
 	void *sender_stats_callback_argument;
 	uint64_t stats_report_time; /* in ticks */
+
+	/* Data fd input (tunnel mode) — read from fd and send as RIST data */
+	int data_fd;
+	size_t data_fd_max_packet_size;
+	uint32_t data_fd_flags;
+	pthread_t data_fd_thread;
+	bool data_fd_thread_started;
+	atomic_uint_fast64_t data_fd_tx_packets;
+	atomic_uint_fast64_t data_fd_tx_bytes;
 };
 
 enum rist_ctx_mode {

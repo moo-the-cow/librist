@@ -19,10 +19,8 @@ typedef struct rist_tools_config_object {
         char * output_url;
         int null_packet_deletion;
         int fast_start;
-#ifdef USE_TUN
         char * tunnel_interface;
         int tun_mode;
-#endif
 #ifdef HAVE_SRP_SUPPORT
         char * srp_file;
 #endif

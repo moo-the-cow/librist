@@ -41,6 +41,7 @@ void rist_receiver_missing(struct rist_flow *f, struct rist_peer *peer,uint64_t 
 		f->missing_tail->next = m;
 		f->missing_tail = m;
 	}
+	f->missing_counter++;
 }
 
 void empty_receiver_queue(struct rist_flow *f, struct rist_common_ctx *ctx)
