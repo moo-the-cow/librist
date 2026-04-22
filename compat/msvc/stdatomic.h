@@ -29,7 +29,8 @@ typedef volatile ULONG  __declspec(align(32)) atomic_bool;
 typedef volatile ULONG  __declspec(align(32)) atomic_int;
 typedef volatile ULONG __declspec(align(32)) atomic_uint;
 typedef volatile ULONG __declspec(align(32)) atomic_ulong;
-typedef volatile USHORT _declspec(align(16)) atomic_uint_fast16_t;
+typedef volatile USHORT __declspec(align(16)) atomic_uint_fast16_t;
+typedef volatile ULONG64 __declspec(align(32)) atomic_uint_fast64_t;
 
 typedef enum {
     memory_order_relaxed,

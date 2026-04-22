@@ -257,11 +257,24 @@ poll(struct pollfd *pfds, nfds_t nfds, int timeout_ms)
 		timeout_ms = INFINITE;
 	looptime_ms = timeout_ms > 100 ? 100 : timeout_ms;
 
+	/*
+	 * Winsock select() mutates the fd_sets in place, leaving only
+	 * descriptors that were ready. Keep pristine copies so each loop
+	 * iteration watches the full set the caller asked about.
+	 */
+	fd_set rfds_save = rfds;
+	fd_set wfds_save = wfds;
+	fd_set efds_save = efds;
+
 	do {
 		struct timeval tv;
 		tv.tv_sec = 0;
 		tv.tv_usec = looptime_ms * 1000;
 		int handle_signaled = 0;
+
+		rfds = rfds_save;
+		wfds = wfds_save;
+		efds = efds_save;
 
 		/*
 		 * Check if any file handles have signaled
@@ -284,8 +297,14 @@ poll(struct pollfd *pfds, nfds_t nfds, int timeout_ms)
 
 		/*
 		 * If we signaled on a file handle, don't wait on the sockets.
+		 * The num_handles guard is required because wait_rc starts out
+		 * as WAIT_FAILED (0xFFFFFFFF) and the comparison is unsigned:
+		 * with num_handles == 0 the right-hand side underflows to
+		 * 0xFFFFFFFF and the condition would always be true, turning
+		 * every poll() into a non-blocking spin.
 		 */
-		if ((wait_rc <= WAIT_OBJECT_0 + num_handles - 1)) {
+		if (num_handles > 0 &&
+		    wait_rc <= WAIT_OBJECT_0 + num_handles - 1) {
 			tv.tv_usec = 0;
 			handle_signaled = 1;
 		}

@@ -114,6 +114,15 @@ windows_version_test = '''
 	else
 		have_pthreads = false
 	endif
+	if cc.get_id() == 'msvc'
+		# librist uses C11 features (stdatomic.h, mixed declarations).
+		# MSVC only exposes them under /std:c11 or /std:c17.
+		if cc.has_argument('/std:c11')
+			add_project_arguments(['/std:c11'], language: 'c')
+		elif cc.has_argument('/std:c17')
+			add_project_arguments(['/std:c17'], language: 'c')
+		endif
+	endif
 	add_project_arguments(['-DWIN32_LEAN_AND_MEAN'], language: 'c')
 	add_project_arguments(['-D__USE_MINGW_ANSI_STDIO=1'], language: 'c')
 	add_project_arguments(['-D_CRT_NONSTDC_NO_DEPRECATE'], language: 'c')
@@ -389,7 +398,7 @@ if get_option('static_analyze')
 	run_target('analyze', command: ['bash', join_paths(librist_src_root, 'common/scripts/analyze.sh')])
 endif
 
-librist_dep = declare_dependency(include_directories: inc, link_with : librist)
+librist_dep = declare_dependency(include_directories: inc, link_with : librist, dependencies : stdatomic_dependency)
 
 if get_option('built_tools')
 	message('Building tools')
