@@ -9,9 +9,25 @@
 #include "log-private.h"
 #ifdef _WIN32
 #include <ws2ipdef.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #ifndef MCAST_JOIN_GROUP
 #define MCAST_JOIN_GROUP 41
 #endif
+
+// Windows socket initialization
+static int winsock_initialized = 0;
+
+static void initialize_winsock(void) {
+    if (!winsock_initialized) {
+        WSADATA wsaData;
+        if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+            // Can't use rist_log here as it might be too early
+            fprintf(stderr, "WSAStartup failed: %d\n", WSAGetLastError());
+        }
+        winsock_initialized = 1;
+    }
+}
 #endif
 
 /* Private functions */
@@ -55,10 +71,17 @@ int udpsocket_resolve_host(const char *host, uint16_t port, struct sockaddr *add
 
 int udpsocket_open(uint16_t af)
 {
+#ifdef _WIN32
+    initialize_winsock();
+#endif
 	int sd = socket(af, SOCK_DGRAM, 0);
 	if (sd < 0) {
 #ifdef _WIN32
-		sd = -1 * WSAGetLastError();
+		int winerr = WSAGetLastError();
+		rist_log_priv3(RIST_LOG_ERROR, "socket() failed: errno=%d, WSAGetLastError=%d\n", errno, winerr);
+		sd = -1 * winerr;
+#else
+		rist_log_priv3(RIST_LOG_ERROR, "socket() failed: %s\n", strerror(errno));
 #endif
 	}
 	return sd;
@@ -242,6 +265,9 @@ fail:
 
 int udpsocket_open_connect(const char *host, uint16_t port, const char *mciface)
 {
+#ifdef _WIN32
+    initialize_winsock();
+#endif
 	int sd;
 	struct sockaddr_in6 raw;
 	uint16_t addrlen;
@@ -266,21 +292,40 @@ int udpsocket_open_connect(const char *host, uint16_t port, const char *mciface)
 		ttlcmd = IP_MULTICAST_TTL;
 	}
 
+	// Windows-specific: Set SO_EXCLUSIVEADDRUSE instead of SO_REUSEADDR for better behavior
+#ifdef _WIN32
+	int exclusive = 1;
+	if (setsockopt(sd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (char *)&exclusive, sizeof(exclusive)) < 0) {
+		int winerr = WSAGetLastError();
+		rist_log_priv3(RIST_LOG_WARN, "Cannot set SO_EXCLUSIVEADDRUSE: %d\n", winerr);
+		// Fall back to SO_REUSEADDR
+		if (setsockopt(sd, SOL_SOCKET, SO_REUSEADDR, (char *)&yes, sizeof(int)) < 0) {
+			rist_log_priv3(RIST_LOG_WARN, "Cannot set SO_REUSEADDR: %d\n", WSAGetLastError());
+		}
+	}
+#else
 	if (setsockopt(sd, SOL_SOCKET, SO_REUSEADDR, (char *)&yes, sizeof(int)) < 0) {
 		/* Non-critical error */
-		rist_log_priv3( RIST_LOG_ERROR,"Cannot set SO_REUSEADDR: %s\n", strerror(errno));
+		rist_log_priv3( RIST_LOG_WARN, "Cannot set SO_REUSEADDR: %s\n", strerror(errno));
 	}
+#endif
+
 	if (setsockopt(sd, proto, ttlcmd, (char *)&ttl, sizeof(ttl)) < 0) {
 		/* Non-critical error */
-		rist_log_priv3( RIST_LOG_ERROR,"Cannot set socket MAX HOPS: %s\n", strerror(errno));
+		rist_log_priv3( RIST_LOG_WARN, "Cannot set socket MAX HOPS: %s\n", strerror(errno));
 	}
 	if (mciface && mciface[0] != '\0')
 		udpsocket_set_mcast_iface(sd, mciface, raw.sin6_family);
 
 	if (connect(sd, (struct sockaddr *)&raw, addrlen) < 0) {
+#ifdef _WIN32
+		int winerr = WSAGetLastError();
+		rist_log_priv3(RIST_LOG_ERROR, "connect() failed: errno=%d, WSAGetLastError=%d\n", errno, winerr);
+#else
 		int err = errno;
+		rist_log_priv3(RIST_LOG_ERROR, "connect() failed: %s\n", strerror(err));
+#endif
 		udpsocket_close(sd);
-		errno = err;
 		return -1;
 	}
 
@@ -289,6 +334,9 @@ int udpsocket_open_connect(const char *host, uint16_t port, const char *mciface)
 
 int udpsocket_open_bind(const char *host, uint16_t port, const char *mciface)
 {
+#ifdef _WIN32
+    initialize_winsock();
+#endif
 	int sd;
 	struct sockaddr_in6 raw;
 	uint16_t addrlen;
@@ -308,12 +356,32 @@ int udpsocket_open_bind(const char *host, uint16_t port, const char *mciface)
 		addrlen = sizeof(struct sockaddr_in);
 		is_multicast = IN_MULTICAST(ntohl(tmp->sin_addr.s_addr));
 	}
+	
+	// Windows-specific socket options
+#ifdef _WIN32
+	int exclusive = 1;
+	if (setsockopt(sd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (char *)&exclusive, sizeof(exclusive)) < 0) {
+		int winerr = WSAGetLastError();
+		rist_log_priv3(RIST_LOG_WARN, "Cannot set SO_EXCLUSIVEADDRUSE: %d\n", winerr);
+		// Fall back to SO_REUSEADDR
+		if (setsockopt(sd, SOL_SOCKET, SO_REUSEADDR, (char *)&yes, sizeof(int)) < 0) {
+			rist_log_priv3(RIST_LOG_WARN, "Cannot set SO_REUSEADDR: %d\n", WSAGetLastError());
+		}
+	}
+#else
 	if (setsockopt(sd, SOL_SOCKET, SO_REUSEADDR, (char *)&yes, sizeof(int)) < 0) {
 		/* Non-critical error */
-		rist_log_priv3( RIST_LOG_ERROR, "Cannot set SO_REUSEADDR: %s\n", strerror(errno));
+		rist_log_priv3( RIST_LOG_WARN, "Cannot set SO_REUSEADDR: %s\n", strerror(errno));
 	}
+#endif
+
 	if (bind(sd, (struct sockaddr *)&raw, addrlen) < 0)	{
+#ifdef _WIN32
+		int winerr = WSAGetLastError();
+		rist_log_priv3(RIST_LOG_ERROR, "Could not bind to interface: errno=%d, WSAGetLastError=%d\n", errno, winerr);
+#else
 		rist_log_priv3( RIST_LOG_ERROR, "Could not bind to interface: %s\n", strerror(errno));
+#endif
 		udpsocket_close(sd);
 		return -1;
 	}
@@ -327,10 +395,21 @@ int udpsocket_open_bind(const char *host, uint16_t port, const char *mciface)
 int udpsocket_set_nonblocking(int sd)
 {
 #ifdef _WIN32
-	u_long iMode=1;
-	ioctlsocket(sd, FIONBIO, &iMode);
+	u_long iMode = 1;
+	if (ioctlsocket(sd, FIONBIO, &iMode) != 0) {
+		rist_log_priv3(RIST_LOG_WARN, "ioctlsocket(FIONBIO) failed: %d\n", WSAGetLastError());
+		return -1;
+	}
 #else
-	RIST_MARK_UNUSED(sd);
+	int flags = fcntl(sd, F_GETFL, 0);
+	if (flags == -1) {
+		rist_log_priv3(RIST_LOG_WARN, "fcntl(F_GETFL) failed: %s\n", strerror(errno));
+		return -1;
+	}
+	if (fcntl(sd, F_SETFL, flags | O_NONBLOCK) == -1) {
+		rist_log_priv3(RIST_LOG_WARN, "fcntl(F_SETFL, O_NONBLOCK) failed: %s\n", strerror(errno));
+		return -1;
+	}
 #endif
 	return 0;
 }
@@ -378,10 +457,10 @@ int udpsocket_close(int sd)
 #endif
 }
 
-int udpsocket_parse_url_parameters(char *url, udpsocket_url_param_t *params, int max_params,
+int udpsocket_parse_url_parameters(const char *url, udpsocket_url_param_t *params, int max_params,
 	uint32_t *clean_url_len)
 {
-	const char* query = NULL;
+	char* query = NULL;
 	int i = 0;
 	char *token = NULL;
 
@@ -397,7 +476,7 @@ int udpsocket_parse_url_parameters(char *url, udpsocket_url_param_t *params, int
 		return 0;
 
 	const char amp[2] = "&";
-	token = strtok( (char*)query + 1, amp );
+	token = strtok( query + 1, amp );
 	while (token != NULL && i < max_params) {
 		params[i].key = token;
 		params[i].val = NULL;
