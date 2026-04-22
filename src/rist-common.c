@@ -3509,12 +3509,17 @@ PTHREAD_START_FUNC(sender_pthread_protocol, arg)
 		if (ctx->sender_queue_bytesize > 0) {
 			pthread_mutex_lock(&ctx->common.peerlist_lock);
 			sender_send_data(ctx, max_dataperloop);
-			pthread_mutex_unlock(&ctx->common.peerlist_lock);
-			// Group nacks and send them all at rist_max_jitter intervals
+			// Group nacks and send them all at rist_max_jitter intervals.
+			// sender_send_nacks() dereferences retry->peer for every
+			// entry in the retry queue; the peer list (and hence any
+			// given peer) can be torn down from rist_peer_destroy()
+			// concurrently, so we must hold peerlist_lock across the
+			// whole dequeue loop to prevent a use-after-free.
 			if (now > nacks_next_time) {
 				sender_send_nacks(ctx);
 				nacks_next_time += ctx->common.rist_max_jitter;
 			}
+			pthread_mutex_unlock(&ctx->common.peerlist_lock);
 		}
 		pthread_mutex_unlock(&ctx->queue_lock);
 		// Send oob data
@@ -3659,6 +3664,21 @@ int rist_peer_remove(struct rist_common_ctx *ctx, struct rist_peer *peer, struct
 		if (check->peer_rtcp == peer)
 			check->peer_rtcp = NULL;
 		check = check->next;
+	}
+
+	/* Defensive: scrub any references to this peer from the sender's
+	 * retry queue. The protocol thread now drains that queue under
+	 * peerlist_lock, so it will never see a dangling retry->peer from
+	 * here, but clearing the slot makes later triage easier and keeps
+	 * the invariant explicit. */
+	if (peer->sender_ctx && peer->sender_ctx->sender_retry_queue) {
+		struct rist_sender *sctx = peer->sender_ctx;
+		for (size_t i = 0; i < sctx->sender_retry_queue_size; i++) {
+			if (sctx->sender_retry_queue[i].peer == peer) {
+				sctx->sender_retry_queue[i].peer = NULL;
+				sctx->sender_retry_queue[i].active = false;
+			}
+		}
 	}
 	if (peer->parent) {
 		peer_remove_child(peer);

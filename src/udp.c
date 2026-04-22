@@ -821,6 +821,18 @@ ssize_t rist_retry_dequeue(struct rist_sender *ctx)
 	ctx->sender_retry_queue_read_index = sender_retry_queue_read_index;
 	struct rist_retry *retry = &ctx->sender_retry_queue[ctx->sender_retry_queue_read_index];
 
+	/* The peer this retry belongs to may have been destroyed while this
+	 * entry was sitting in the queue. rist_peer_remove() scrubs the slot
+	 * to NULL under peerlist_lock, and we are called with peerlist_lock
+	 * held, so seeing NULL here simply means the retry is stale; drop
+	 * it and let the caller move on to the next entry (returning 0 would
+	 * abort sender_send_nacks() and starve legitimate retries queued
+	 * behind this one). */
+	if (RIST_UNLIKELY(!retry->peer)) {
+		retry->active = false;
+		return -1;
+	}
+
 	// If they request a non-sense seq number, we will catch it when we check the seq number against
 	// the one on that buffer position and it does not match
 
