@@ -1110,4 +1110,3 @@ void rist_print_inet_info(char *prefix, struct rist_peer *peer)
 	}
 
 }
-
